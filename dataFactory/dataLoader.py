@@ -14,7 +14,7 @@ class DataLoader:
         if forceCPU:
             self.device = torch.device('cpu')
         else:
-            self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+            self.device = params.get_device()
         pass
 
     def loadData(self, iFold, dataPref=""):

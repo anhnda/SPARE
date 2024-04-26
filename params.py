@@ -12,6 +12,8 @@ The available options for the parameters can be found by running:
 
 import os
 
+import torch
+
 C_DIR = os.path.abspath(os.path.dirname(__file__))
 DATA_DIR = "%s/data" % C_DIR
 TMP_DIR = "%s/tmpOut" % C_DIR
@@ -83,4 +85,15 @@ Tau = 0.02
 Delta = 1
 
 
-
+def get_device():
+    if not torch.backends.mps.is_available():
+        if not torch.backends.mps.is_built():
+            print("MPS not available because the current PyTorch install was not "
+                  "built with MPS enabled.")
+        else:
+            print("MPS not available because the current MacOS version is not 12.3+ "
+                  "and/or you do not have an MPS-enabled device on this machine.")
+        device = torch.device("cpu")
+    else:
+        device = torch.device("mps")
+    return device

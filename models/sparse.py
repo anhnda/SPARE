@@ -5,14 +5,16 @@ from sklearn.metrics import roc_auc_score, average_precision_score
 import params
 from scipy.stats import halfcauchy
 
-from models.hyperconv import HyperConv
 
+# from models.hyperconv import HyperConv
 
+DEVICE = params.get_device()
 class SPARSECore(torch.nn.Module):
     r"""
     Sparse core module with Encoder - Decoder
     """
-    def __init__(self, numDrug, numSE, latentSize, features=None, n_layer=1, device=torch.device('cpu'),
+
+    def __init__(self, numDrug, numSE, latentSize, features=None, n_layer=1, device=DEVICE,
                  latentSizeList=None):
         super(SPARSECore, self).__init__()
         self.numDrug = numDrug
@@ -34,9 +36,9 @@ class SPARSECore(torch.nn.Module):
 
         self.convs = torch.nn.ModuleList()
         self.convAct = torch.nn.ReLU()
-        for i in range(self.n_layer):
-            layer = HyperConv(latentSize, latentSize, 5, device=device)
-            self.convs.append(layer)
+        # for i in range(self.n_layer):
+        #     layer = HyperConv(latentSize, latentSize, 5, device=device)
+        #     self.convs.append(layer)
 
         self.seEmbeddings = torch.nn.Embedding(numSE, latentSize2).to(device)
         self.seIndices = torch.arange(0, numSE, dtype=torch.long).to(device)
@@ -57,6 +59,8 @@ class SPARSECore(torch.nn.Module):
     def project(self):
         self.latentInteractions.data[self.latentInteractions.data < 0] = 0
         self.lambdaHorseShoe.data[self.lambdaHorseShoe.data < 0] = 0
+        # self.lambdaHorseShoe.data[self.lambdaHorseShoe.data > 1e8]
+
         self.seEmbeddings.weight.data[self.seEmbeddings.weight.data < 0] = 0
 
     def encode1(self, drug1Indices, drug2Indices, seIndices):
@@ -120,7 +124,8 @@ class SPARSEModel:
     SPARSE with a fitting (training) function
     Stochastic method is applied that we only sample a sub-tensor for each iteration
     """
-    def __init__(self, shape, latentSize, features, device=torch.device('cpu'), latentSizeList=None, nLayers=2):
+
+    def __init__(self, shape, latentSize, features, device=DEVICE, latentSizeList=None, nLayers=2):
 
         self.name = "SPARSE"
         self.shape = shape
@@ -140,22 +145,22 @@ class SPARSEModel:
     def sampleIndices(self, nSample=-1, isFull=False):
         if isFull:
             return torch.from_numpy(np.arange(0, self.numDrug)).long().to(self.device), \
-                   torch.from_numpy(np.arange(0, self.numDrug)).long().to(self.device), \
-                   torch.from_numpy(np.arange(0, self.numSe)).long().to(self.device)
+                torch.from_numpy(np.arange(0, self.numDrug)).long().to(self.device), \
+                torch.from_numpy(np.arange(0, self.numSe)).long().to(self.device)
 
         return torch.from_numpy(np.random.choice(self.dim1DrugIndices, nSample, replace=False)).long().to(self.device), \
-               torch.from_numpy(np.random.choice(self.dim2DrugIndices, nSample, replace=False)).long().to(self.device), \
-               torch.from_numpy(np.random.choice(self.dimSeIndices, nSample, replace=False)).long().to(self.device)
+            torch.from_numpy(np.random.choice(self.dim2DrugIndices, nSample, replace=False)).long().to(self.device), \
+            torch.from_numpy(np.random.choice(self.dimSeIndices, nSample, replace=False)).long().to(self.device)
 
     def project(self):
         self.model.project()
 
     def getHorseShoeTerm(self):
         return 0.5 * torch.sum(self.model.latentInteractions * self.model.latentInteractions / (
-                self.model.lambdaHorseShoe * self.model.lambdaHorseShoe)) / (
-                       params.Tau * params.Tau) \
-               + torch.sum(torch.log(self.model.lambdaHorseShoe)) \
-               + torch.sum(torch.log(1 + self.model.lambdaHorseShoe * self.model.lambdaHorseShoe))
+                self.model.lambdaHorseShoe * self.model.lambdaHorseShoe )) / (
+                params.Tau * params.Tau) \
+            + torch.sum(torch.log(self.model.lambdaHorseShoe )) \
+            + torch.sum(torch.log(1 + self.model.lambdaHorseShoe * self.model.lambdaHorseShoe))
 
     def getLossHorseShoe(self, target, pred, w=params.L_W):
         s = target.shape
@@ -164,8 +169,9 @@ class SPARSEModel:
         e = target - pred
         e = e ** 2
         e = ar * e
-        r = params.Delta * torch.sum(e) + self.getHorseShoeTerm()
-        return r
+        r1 = params.Delta * torch.sum(e)
+        r2 = self.getHorseShoeTerm()
+        return r1+r2, r1, r2
 
     def fit(self, ddiTensor, dataWrapper=None, logger=None):
         assert ddiTensor.shape == self.shape
@@ -192,12 +198,13 @@ class SPARSEModel:
                                                                     dataWrapper.hyperEdgeIndex,
                                                                     dataWrapper.hyperEdgeTypes)
 
-            err = self.getLossHorseShoe(targetScores, predScores)
+            err, r1, r2 = self.getLossHorseShoe(targetScores, predScores)
             if i % params.ITER_DB == 0:
                 print("\r%s %s" % (i, err / (sampleSize * sampleSize * sampleSize)), end="")
             err.backward()
-            optimizer.step()
+            # torch.nn.utils.clip_grad_norm_(self.model.parameters(),10000)
 
+            optimizer.step()
             if params.NON_NEG:
                 self.project()
 
@@ -258,7 +265,8 @@ class SPARSEModel:
         latentInteractions = latentInteractions.reshape(d1, d2 * d3)
         pref = "S"
         np.savetxt("%s/%s_%s_B_%s_%s_%s.txt" % (
-            params.TMP_DIR, params.D_PREF, pref, params.iFold, params.Tau, int(params.HIGH_TWOSIDES)), latentInteractions)
+            params.TMP_DIR, params.D_PREF, pref, params.iFold, params.Tau, int(params.HIGH_TWOSIDES)),
+                   latentInteractions)
         np.savetxt("%s/%s_%s_D_%s_%s_%s.txt" % (
             params.TMP_DIR, params.D_PREF, pref, params.iFold, params.Tau, int(params.HIGH_TWOSIDES)), drugEmbeddings)
         np.savetxt("%s/%s_%s_S_%s_%s_%s.txt" % (

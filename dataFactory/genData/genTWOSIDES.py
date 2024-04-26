@@ -3,7 +3,7 @@ import params
 from utils import utils
 import random
 import copy
-from dataFactory.moleculeFactory import MoleculeFactory
+# from dataFactory.moleculeFactory import MoleculeFactory
 
 from multiprocessing import Process, Value, Queue
 
@@ -231,7 +231,7 @@ def createSubSet(inp_path=params.PATH_TWOSIDES_A):
     drugCountSorted = utils.sort_dict(drugCount)
     validInchi = set()
     m = min(len(drugCount), params.MAX_R_DRUG)
-    MIN_D = 10
+    MIN_D = 3
     for i in range(m):
         inchi, c = drugCountSorted[i]
         if c < MIN_D:

@@ -8,7 +8,7 @@ from dataFactory.genData.genTWOSIDES import loadProtein2Pathway
 
 from utils import utils
 
-N_TOP = 400
+N_TOP = 2000
 
 
 def calPerson(matX, Y):
@@ -326,6 +326,209 @@ def exportTopPredictionAll(dataPref="", pref="S", iFold=0, tau=params.Tau, shape
         print("Top predictions are at: ", pathOut2)
         print("Raw interpretations are at: ", pathOut1)
 
+def loadSelectedDrugs(path = "%s/SelectedDrugs" % params.DATA_DIR):
+    drugMapPath = "%s/TWOSIDES/DrugId2NameC5.txt" % params.TMP_DIR
+    d = {}
+    fin = open(drugMapPath)
+    while True:
+        line = fin.readline()
+        if line == "":
+            break
+        parts = line.strip().split("\t")
+        d[parts[1]] = int(parts[0])
+    print(d)
+    fin.close()
+    selectedIds = set()
+    fin = open(path)
+    lines = fin.readlines()
+
+    for line in lines:
+        line = line.strip()
+        if line in d:
+            selectedIds.add(d[line])
+            print(line)
+        fin.close()
+    return selectedIds
+def exportTopPredictionSelectedDrugs(dataPref="", pref="S", iFold=0, tau=params.Tau, shape=None, pName=True,
+                           matchingPath=None):
+    r"""
+    Exporting the top of all predictions
+    """
+    selectedIds = loadSelectedDrugs()
+    print("Num selected drugs: %d" % len(selectedIds))
+    print(selectedIds)
+    dPId2Name = loadProteinID2Name()
+    d = np.loadtxt(
+        "%s/%s_%s_D_%s_%s_1.txt" % (params.TMP_DIR, dataPref, pref, iFold, tau))
+    e = np.loadtxt(
+        "%s/%s_%s_S_%s_%s_1.txt" % (params.TMP_DIR, dataPref, pref, iFold, tau))
+    b = np.loadtxt(
+        "%s/%s_%s_B_%s_%s_1.txt" % (params.TMP_DIR, dataPref, pref, iFold, tau))
+
+    k = b.shape[0]
+
+    suffix = "HS"
+
+    if shape is not None:
+        k1, k2, k3 = shape
+    else:
+        k1 = k2 = k3 = k
+
+    bTensor = b.reshape((k1, k2, k3))
+
+    dProtein2Id, features = utils.load_obj("%s/TWOSIDES/TWOSIDESfeatures_1.dat" % params.TMP_DIR)
+    dId2Protein = utils.reverse_dict(dProtein2Id)
+    dGroup2PV = utils.load_obj("%s/group2P.dat" % params.TMP_DIR)
+    nProtein = len(dProtein2Id)
+
+    nPathway, dPathwayId2Name, dPathwayId2KEGGID, dProtein2Pathway = loadPathwayId2Name()
+
+    dataWrapper = DataLoader(forceCPU=True)
+    dataWrapper.loadData(iFold)
+
+    nD, nSe = dataWrapper.data.nD, dataWrapper.data.nSe
+    # sId = np.random.randint(0, nSe) + 99
+    id2ADr, dId2DrugName = utils.load_obj(params.ID2NamePath_TWOSIDEC5)
+
+    def getPA(d1, k):
+        xd = features[d1, -(nProtein + nPathway): -nPathway]
+        pk, pak = dGroup2PV[k]
+        v = xd * pk
+        pp = np.nonzero(v)[0]
+        proteins = []
+        paSet = set()
+        for p in pp:
+            e = dId2Protein[p]
+            pathwayIds = utils.get_dict(dProtein2Pathway, e, [])
+            for pathwayId in pathwayIds:
+                paSet.add(pathwayId)
+
+            if pName:
+                e = utils.get_dict(dPId2Name, e, e)
+            proteins.append(e)
+
+        xd2 = features[d1, -nPathway:]
+        v2 = xd2 * pak
+        pp2 = np.nonzero(v2)[0]
+        pathways = []
+        for pa in pp2:
+            if pa in paSet:
+                e = dPathwayId2Name[pa]
+                pathways.append(e)
+        if len(pathways) == 0:
+            pathways.append("Unknown")
+
+        return proteins, pathways
+
+    pathOut1 = "%s/RawInterpretation.txt" % (params.TMP_DIR)
+    pathOut2 = "%s/TopPredictedTriples.txt" % (params.TMP_DIR)
+    fout = open(pathOut1, "w")
+    fout2 = open(pathOut2, "w")
+
+    pred = matOuterX(d, d, e, bTensor)
+    mask = 1 - dataWrapper.ddiTensor
+    print("DB")
+    print(dataWrapper.ddiTensor.shape)
+    print(pred.shape)
+    print(d.shape, e.shape, bTensor.shape)
+    pred *= mask
+
+    maxPredIndices = np.argsort(pred.reshape(-1))[::-1]
+
+    nTopSamples = 10000000
+    nC = 0
+    ress = []
+    dSet = set()
+    for i in range(nTopSamples):
+
+        d1i, d2i, ei = np.unravel_index(maxPredIndices[i], (nD, nD, nSe))
+        if d1i == d2i:
+            continue
+        sd1, sd2 = swapMax(d1i, d2i)
+        if (sd1, sd2) in dSet:
+            continue
+        if not sd1 in selectedIds and not sd2 in selectedIds:
+            continue
+        dSet.add((sd1, sd2))
+        nC += 1
+        print("\r%8d %4d" %(i, nC), end="")
+
+        ed1, ed2, ee = d[d1i, :], d[d2i, :], e[ei, :]
+        sTripple = dOuterP(ed1, ed2, ee)
+        sTripple *= bTensor
+        ranks = np.argsort(sTripple.reshape(-1))[::-1]
+        i1, i2, i3 = np.unravel_index(ranks[0], shape=bTensor.shape)
+        ress.append((d1i, d2i, ei, i1, i2, i3))
+        if nC == N_TOP:
+            break
+
+    # dMatchingDrugPair = set()
+    dDes = dict()
+    fMatching = None
+    fNoMatching = None
+    if matchingPath is not None:
+        fin = open(matchingPath)
+        while True:
+            line = fin.readline()
+            if line == "":
+                break
+            parts = line.strip().split("||")
+            dpair = parts[0]
+            des = parts[1]
+            dDes[dpair] = des
+        fMatching = open("%s/InterPredMatching.txt" % params.TMP_DIR, "w")
+        fNoMatching = open("%s/InterPredNoMatching.txt" % params.TMP_DIR, "w")
+
+    def srt(d1, d2):
+        if d1 > d2:
+            d1, d2 = d2, d1
+        return d1, d2
+
+    ii1 = 0
+    ii2 = 0
+
+    for res in ress:
+        d1, d2, e3, i1, i2, i3 = res
+        l1, la1 = getPA(d1, i1)
+        l2, la2 = getPA(d2, i2)
+        d1Name, d2Name, sName, l1, l2, la1, la2 = dId2DrugName[d1], dId2DrugName[d2], id2ADr[e3], l1, l2, la1, la2
+
+        if matchingPath is not None:
+            d1x, d2x = srt(d1Name.lower(), d2Name.lower())
+            dpair = "%s,%s" % (d1x, d2x)
+            r = utils.get_dict(dDes, dpair, "")
+            if r == "":
+                ff = fNoMatching
+                ii2 = ii2 + 1
+                ii = ii2
+            else:
+                ff = fMatching
+                ii1 = ii1 + 1
+                ii = ii1
+            ff.write("\n+%s) New sample: %s, %s, %s, %s, %s, %s\n" % (ii, d1Name, d2Name, sName, i1, i2, i3))
+            if r != "":
+                ff.write("\tDescription: %s\n" % r.replace(".", "\n"))
+            ff.write("\t%s:\n \t-> Proteins: %s\n" % (d1Name, ",".join(l1)))
+            ff.write("\t-> Pathways: \n\t\t%s\n" % "\n\t \t".join(la1))
+            ff.write("\t%s:\n \t-> Proteins: %s\n" % (d2Name, ",".join(l2)))
+            ff.write("\t-> Pathways: \n\t\t%s\n" % "\n\t \t".join(la2))
+
+        else:
+            fout.write("\n+) New sample: %s, %s, %s, %s, %s, %s\n" % (d1Name, d2Name, sName, i1, i2, i3))
+            fout.write("\t%s:\n \t-> Proteins: %s\n" % (d1Name, ",".join(l1)))
+            fout.write("\t-> Pathways: \n\t\t%s\n" % "\n\t \t".join(la1))
+            fout.write("\t%s:\n \t-> Proteins: %s\n" % (d2Name, ",".join(l2)))
+            fout.write("\t-> Pathways: \n\t\t%s\n" % "\n\t \t".join(la2))
+            fout2.write("%s, %s, %s\n" % (d1Name, d2Name, sName))
+
+    fout.close()
+    if matchingPath is not None:
+        fMatching.close()
+        fNoMatching.close()
+
+    if params.INFO_OUTPUT:
+        print("Top predictions are at: ", pathOut2)
+        print("Raw interpretations are at: ", pathOut1)
 
 def exportTopPredictionEachSE(dataPref="", pref="S", iFold=0, tau=params.Tau, pName=True,
                               matchingPath="%s/PairMatching.txt" % params.TMP_DIR, shape=None):
@@ -720,7 +923,7 @@ def getTailArea(ar, p, dt=0.0001):
     return s
 
 
-def exportTopPredictionSelectedDrugs(dataPref="", pref="S", iFold=0, tau=params.Tau, shape=None, pName=True,
+def exportTopPredictionSelectedDrugsOld(dataPref="", pref="S", iFold=0, tau=params.Tau, shape=None, pName=True,
                                      matchingPath="%s/PairMatching.txt" % params.TMP_DIR):
     r"""
     Exporting the top of all predictions
@@ -1047,8 +1250,9 @@ def matchTopListDrugsComX(dataPref="", pref="S", iFold=0, tau=params.Tau, shape=
             print("Top matching predictions: ", spareMatchingPath)
 
 
-def extract(tau=0.02, mode=1):
+def extract(tau=0.02, mode=3):
     exportLatentFeature(tau=tau)
+    print("Extracting Mode: ", mode)
     if mode == 2:
         print("Extracting TOP SE selected drugs")
         exportTopPredictionSelectedDrugs(tau=tau, matchingPath=None)
@@ -1058,6 +1262,8 @@ def extract(tau=0.02, mode=1):
     elif mode == 0:
         print("Extracting Top SE All")
         exportTopPredictionAll(tau=tau, matchingPath=None)
+    elif mode == 3:
+        exportTopPredictionSelectedDrugs(tau=tau, matchingPath=None)
 
 
 def rematching(tau=0.02):

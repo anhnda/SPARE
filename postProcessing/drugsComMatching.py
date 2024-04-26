@@ -1,11 +1,17 @@
 from selenium import webdriver
 import time
+
+from selenium.webdriver.chrome.service import Service
+
 from utils import utils
 from bs4 import BeautifulSoup
 import params
 from selenium.webdriver.common.by import By
+import json
+from utils.utils import getTextURL
 
-Pref = "https://www.drugs.com/js/search/?id=livesearch-interaction&s="
+
+Pref = "https://www.drugs.com/api/autocomplete/?id=livesearch-interaction&s=%s&data-autocomplete=interaction"
 INTER_PREF = "https://www.drugs.com/interactions-check.php?drug_list="
 RAW_DRUG_TEXT = params.DRUGSCOM_DRUG_ID_RAW
 DRUG_WEB_ID_PATH = params.DRUGSCOM_DRUG_ID_WEB
@@ -38,7 +44,7 @@ def getRetrieveDrugURL(drugName):
     Returns:
         An URL for getting Drugs.com Id given a drug name
     """
-    return "%s%s" % (Pref, drugName)
+    return Pref % drugName
 
 
 def downloadDrugWebId():
@@ -46,7 +52,18 @@ def downloadDrugWebId():
     Getting raw responses from drugs.com for mapping from drug names to drug ids
     The result is saved in RAW_DRUG_TEXT
     """
+
+    # from selenium.webdriver.chrome.options import Options
+
+    #options = Options()
+    # options.binary_location = '/Users/anhnd/Downloads/chrome-mac-arm64/Google Chrome for Testing'
+    ## this is the chromium for testing which can be downloaded from the link given below
+    # service = Service('/Users/anhnd/Downloads/chrome-mac-arm64/Google Chrome for Testing')
+
     browser = webdriver.Chrome()
+
+
+    # browser = webdriver.Chrome()
 
     drugList = loadDrugList()
     try:
@@ -59,14 +76,12 @@ def downloadDrugWebId():
             continue
         print("\r %s, %s" % (len(dDrugName2Re), drug), end="")
         urlx = getRetrieveDrugURL(drug)
-        browser.get(urlx)
-        html = browser.find_elements(By.TAG_NAME, 'body')[0]
-        html = html.get_attribute('innerHTML')
-        dDrugName2Re[drug] = html
+
+        dDrugName2Re[drug] = getTextURL(urlx)
         time.sleep(3)
         if len(dDrugName2Re) % 10 == 0:
             utils.save_obj(dDrugName2Re, RAW_DRUG_TEXT)
-            print(html)
+            print(urlx)
 
     utils.save_obj(dDrugName2Re, RAW_DRUG_TEXT)
 
@@ -80,25 +95,44 @@ def parsex(pin=RAW_DRUG_TEXT, pout=DRUG_WEB_ID_PATH):
 
 
     """
+    print("\r Parsing Drug Raw Ids", end="")
     d = utils.load_obj(pin)
+    print("OK? ", pout)
     fout = open(pout, "w")
     for k, v in d.items():
         rex = []
+        print(k,v)
         try:
-            vbody = BeautifulSoup(v, "html.parser")
-            c = vbody.find('a', {"class": "ls-item"})
-            txt = c['onclick']
-            i1 = txt.index('(')
-            i2 = txt.index(')')
-            re = txt[i1 + 1:i2]
-            parts = re.split(",")
+            if (v.startswith('{"categories":')):
+                jsonObj = json.loads(v)
+                info1 = jsonObj["categories"]
 
-            for part in parts:
-                part = part.strip()
-                val = part[1:-1]
-                rex.append(val)
-            # if not rex[-1] == k:
-            #     rex = []
+                info1 = info1[0]["results"][0]
+
+
+                ddc_id = "%s" % info1["ddc_id"]
+                b_id = "%s" % info1["brand_name_id"]
+
+                rex.append(ddc_id)
+                rex.append(b_id)
+                print("OK")
+
+
+            else:
+                vbody = BeautifulSoup(v, "html.parser")
+                c = vbody.find('a', {"class": "ls-item"})
+                txt = c['onclick']
+                i1 = txt.index('(')
+                i2 = txt.index(')')
+                re = txt[i1 + 1:i2]
+                parts = re.split(",")
+
+                for part in parts:
+                    part = part.strip()
+                    val = part[1:-1]
+                    rex.append(val)
+                # if not rex[-1] == k:
+                #     rex = []
         except:
             pass
         if len(rex) > 0:
@@ -203,7 +237,7 @@ def extractInteraction():
         div = vbody.find("div", {'class': 'interactions-reference-wrapper'})
         isNoMatch = False
         try:
-            if div.text.__contains__('No interactions were found between the drugs in your list.'):
+            if div.text.__contains__('No drug ⬌ drug interactions were found'):
                 fnoMatching.write("%s\n" % k)
                 isNoMatch = True
         except Exception as e:
@@ -244,9 +278,16 @@ def matching():
     getInteractions()
     extractInteraction()
 
-
+def demo():
+    url = "https://www.drugs.com/api/autocomplete/?id=livesearch-interaction&s=fludarabine&data-autocomplete=interaction"
+    from utils.utils import getTextURL
+    print(getTextURL(url))
 if __name__ == "__main__":
+    print("Start ")
+
     # getDrugsComIds()
     # getInteractions()
-    # extractInteraction()
+    extractInteraction()
+    # demo()
+    print("End ")
     pass

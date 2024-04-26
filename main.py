@@ -1,3 +1,5 @@
+import torch
+
 import params
 from models import training
 from optparse import OptionParser

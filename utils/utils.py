@@ -5,11 +5,17 @@ import joblib
 import os
 import time
 
+import requests
+
 
 def getCurrentTimeString():
     t = time.localtime()
     currentTime = time.strftime("%Y-%m-%d %H:%M:%S", t)
     return currentTime
+
+def getTextURL(url):
+        response = requests.get(url)
+        return response.text
 
 
 def ensure_dir(directory):

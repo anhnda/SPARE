@@ -9,7 +9,8 @@ from utils.logger.logger2 import MyLogger
 
 
 def runTraining():
-    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    device = params.get_device()
+    # device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     allAUC = []
     allAUPR = []
     folds = [i for i in range(params.K_FOLD)]
